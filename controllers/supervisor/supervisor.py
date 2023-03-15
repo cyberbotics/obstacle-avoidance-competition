@@ -1,37 +1,71 @@
-"""Supervisor of the Robot Programming Competition."""
+"""Supervisor of the Obstacle Avoidance benchmark."""
 
 from controller import Supervisor
 import os
+import random
+import math
 
-supervisor = Supervisor()
 
-timestep = int(supervisor.getBasicTimeStep())
+def normalize(vector):
+    length = math.sqrt(vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2])
+    if length == 0:
+        return [0, 0, 1]
+    else:
+        return [vector[0] / length, vector[1] / length, vector[2] / length]
 
-thymio = supervisor.getFromDef("COMPETITION_ROBOT")
-translation = thymio.getField("translation")
 
-tx = 0
-ongoing_competition = True
-while supervisor.step(timestep) != -1 and ongoing_competition:
-    t = translation.getSFVec3f()
-    if ongoing_competition:
-        percent = 1 - abs(0.25 + t[0]) / 0.25
-        if percent < 0:
-            percent = 0
-        if t[0] < -0.01 and abs(t[0] - tx) < 0.0001:  # away from starting position and not moving any more
-            ongoing_competition = False
-            name = 'Robot Programming'
-            message = f'success:{name}:{percent}:{percent*100:.2f}%'
-        else:
-            message = f"percent:{percent}"
-        supervisor.wwiSendText(message)
-        tx = t[0]
+def randomlyPlaceObject(node):
+    translationField = node.getField("translation")
+    rotationField = node.getField("rotation")
 
-print(f"Competition complete! Your performance was {message.split(':')[3]}")
+    newPosition = [random.random() * 1.6 - 0.5, random.random() * 2 - 1, random.random() + 0.5]
+    newRotation = normalize([random.random(), random.random(), random.random()]) + [random.random() * math.pi * 2]
 
-# Performance output used by automated CI script
+    translationField.setSFVec3f(newPosition)
+    rotationField.setSFRotation(newRotation)
+
+
+random.seed()
+robot = Supervisor()
+thymio2 = robot.getFromDef("THYMIO2")
+
+timestep = int(robot.getBasicTimeStep())
+
+cubeObstaclesGroup = robot.getFromDef("CUBE_OBSTACLES")
+cubeObstaclesField = cubeObstaclesGroup.getField("children")
+cubeObstaclesCount = cubeObstaclesField.getCount()
+cubeObstacles = []
+
+for x in range(0, cubeObstaclesCount):
+    cubeObstacles.append(cubeObstaclesField.getMFNode(x))
+
+running = True
+stopMessageSent = False
+i = 0
+while running and robot.step(timestep) != -1:
+    if i < cubeObstaclesCount:
+        randomlyPlaceObject(cubeObstacles[i])
+        i += 1
+
+    time = robot.getTime()
+    # If the robot has collided with something that isn't the ground or has
+    # reached the goal or has even run out of time, record final time and
+    # terminate simulation.
+    contactPoints = thymio2.getContactPoints()
+    for contact in contactPoints:
+        if contact.point[2] > 0.02 or thymio2.getPosition()[1] > 3.3 or time >= 80:
+            if contact.point[2] > 0.02:
+                time = 80
+            running = False
+            break
+    robot.wwiSendText("time:%-24.3f" % time)
+
+robot.wwiSendText("stop:%-24.3f" % time)
+
 CI = os.environ.get("CI")
 if CI:
-    print(f"performance:{percent}")
+    print(f"performance:{time}")
+else:
+    print(f"Benchmark finished! Final performance: {time} seconds")
 
-supervisor.simulationSetMode(Supervisor.SIMULATION_MODE_PAUSE)
+robot.simulationSetMode(Supervisor.SIMULATION_MODE_PAUSE)
